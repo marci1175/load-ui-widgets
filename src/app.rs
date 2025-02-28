@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use egui::{Response, Ui};
-use mlua::Lua;
+use mlua::{AnyUserData, FromLuaMulti, Function, IntoLua, IntoLuaMulti, Lua, LuaSerdeExt, MultiValue, Table, UserData};
 
 #[derive(serde::Deserialize, serde::Serialize)]
 #[serde(default)]
@@ -33,20 +33,70 @@ impl Application {
     }
 }
 
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+pub struct TextEditOutput {
+    pub buffer: Arc<Mutex<String>>,
+}
+
+impl UserData for TextEditOutput {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("get_buffer", |_, this, _: ()| {
+            Ok(this.buffer.lock().unwrap().clone())
+        });
+    }
+}
+
 fn setup_lua_engine(ui_elements: Arc<Mutex<Vec<Box<dyn Fn(&mut Ui) -> Response + Send + Sync>>>>) -> Lua {
     let lua_engine = unsafe { Lua::unsafe_new() };
 
-    let ui_elements = ui_elements.clone();
+    let ui_elements_clone = ui_elements.clone();
 
-    let function = lua_engine.create_function(move |_, label: String| {
-        let mut ui_elements = ui_elements.lock().unwrap();
+    let ui_label = lua_engine.create_function(move |_, label: String| {
+        let mut ui_elements = ui_elements_clone.lock().unwrap();
 
         ui_elements.push(Box::new(move |ui| {ui.label(label.clone())}));
 
         Ok(())
     }).unwrap();
 
-    lua_engine.globals().set("ui_label", function).unwrap();
+    lua_engine.globals().set("ui_label", ui_label).unwrap();
+
+    let ui_elements_clone = ui_elements.clone();
+
+    let ui_textedit = lua_engine.create_function(move |_, _: ()| {
+        let mut ui_elements = ui_elements_clone.lock().unwrap();
+
+        let buffer: Arc<Mutex<String>> = Arc::new(Mutex::new(String::new()));
+
+        let buffer_clone = buffer.clone();
+
+        ui_elements.push(Box::new(move |ui| {ui.text_edit_singleline(&mut *buffer_clone.lock().unwrap())}));
+
+        Ok(TextEditOutput { buffer })
+    }).unwrap();
+
+    lua_engine.globals().set("ui_textedit", ui_textedit).unwrap();
+
+    let ui_elements_clone = ui_elements.clone();
+
+    let ui_button = lua_engine.create_function(move |_, (label, callback): (String, Function)| {
+        let mut ui_elements = ui_elements_clone.lock().unwrap();
+
+        ui_elements.push(Box::new(move |ui| {
+            let button = ui.button(label.clone());
+
+            if button.clicked() {
+                callback.call::<()>(()).unwrap();
+            }
+
+            button
+        }));
+
+        Ok(())
+    }).unwrap();
+
+    lua_engine.globals().set("ui_button", ui_button).unwrap();
+
 
     lua_engine
 }
@@ -63,6 +113,11 @@ impl eframe::App for Application {
                     dbg!(err);
                 };
             }
+
+            if let Ok(draw_fn) = self.lua_engine.globals().get::<Function>("on_draw") {
+                let _: () = draw_fn.call(()).unwrap();
+            }
+
 
             for widget in self.ui_elements.lock().unwrap().iter() {
                 ui.add(widget);
