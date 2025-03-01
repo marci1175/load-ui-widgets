@@ -1,4 +1,4 @@
-use std::sync::{Arc, Mutex};
+use std::sync::{atomic::AtomicBool, Arc, Mutex};
 
 use egui::{Response, Ui};
 use mlua::{AnyUserData, FromLuaMulti, Function, IntoLua, IntoLuaMulti, Lua, LuaSerdeExt, MultiValue, Table, UserData};
@@ -42,6 +42,19 @@ impl UserData for TextEditOutput {
     fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
         methods.add_method("get_buffer", |_, this, _: ()| {
             Ok(this.buffer.lock().unwrap().clone())
+        });
+    }
+}
+
+#[derive(serde::Deserialize, serde::Serialize, Clone)]
+pub struct CheckBoxOutput {
+    pub is_checked: Arc<Mutex<bool>>,
+}
+
+impl UserData for CheckBoxOutput {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("get_buffer", |_, this, _: ()| {
+            Ok(this.is_checked.lock().unwrap().clone())
         });
     }
 }
@@ -97,6 +110,37 @@ fn setup_lua_engine(ui_elements: Arc<Mutex<Vec<Box<dyn Fn(&mut Ui) -> Response +
 
     lua_engine.globals().set("ui_button", ui_button).unwrap();
 
+    let ui_elements_clone = ui_elements.clone();
+
+    let ui_separator = lua_engine.create_function(move |_, _: ()| {
+        let mut ui_elements = ui_elements_clone.lock().unwrap();
+
+        ui_elements.push(Box::new(move |ui| {
+            ui.separator()
+        }));
+
+        Ok(())
+    }).unwrap();
+
+    lua_engine.globals().set("ui_separator", ui_separator).unwrap();
+
+    let ui_elements_clone = ui_elements.clone();
+
+    let ui_checkbox = lua_engine.create_function(move |_, label: String| {
+        let mut ui_elements = ui_elements_clone.lock().unwrap();
+
+        let is_checked = Arc::new(Mutex::new(false));
+        
+        let is_checked_clone = is_checked.clone();
+
+        ui_elements.push(Box::new(move |ui| {
+            ui.checkbox(&mut is_checked_clone.lock().unwrap(), label.clone())
+        }));
+
+        Ok(CheckBoxOutput { is_checked })
+    }).unwrap();
+
+    lua_engine.globals().set("ui_checkbox", ui_checkbox).unwrap();
 
     lua_engine
 }

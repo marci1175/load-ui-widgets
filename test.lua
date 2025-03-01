@@ -1,5 +1,10 @@
+local output = ui_textedit()
+
 function hellowrld()
-    print("Hello world!")
+    print(output:get_buffer())
 end
 
-local output = ui_button("Print hw!", hellowrld)
+ui_separator()
+
+ui_button("Print text!", hellowrld)
+
